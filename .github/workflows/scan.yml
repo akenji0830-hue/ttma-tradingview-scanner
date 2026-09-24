@@ -2,8 +2,8 @@ name: TradingView L1 and S Alpha scan
 
 on:
   schedule:
-    # 14:17 Asia/Taipei, Monday-Friday. GitHub's cron clock is UTC.
-    - cron: '17 6 * * 1-5'
+    # 13:31 Asia/Taipei, Monday-Friday. GitHub's cron clock is UTC.
+    - cron: '31 5 * * 1-5'
   workflow_dispatch:
     inputs:
       mode:
