@@ -1,0 +1,68 @@
+name: TradingView L1 and S Alpha scan
+
+on:
+  schedule:
+    # 14:17 Asia/Taipei, Monday-Friday. GitHub's cron clock is UTC.
+    - cron: '17 6 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'test scans 5 symbols and sends no email; full scans 997 symbols'
+        required: true
+        type: choice
+        default: test
+        options:
+          - test
+          - full
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tradingview-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    # Scheduled runs remain disabled until the five-stock and full-scan tests
+    # pass and GitHub Actions billing is configured to stop at the free limit.
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_WEEKDAY_SCAN == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 270
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check stock list and indicator parser
+        run: node tradingview-signal-scanner.mjs self-test --input cloud/stocks.txt
+      - name: Install mail dependency
+        run: npm install --prefix cloud --omit=dev --no-audit --no-fund
+      - name: Scan TradingView
+        env:
+          TV_SESSION_COOKIES_B64: ${{ secrets.TV_SESSION_COOKIES_B64 }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          TV_SIGNAL_PROFILE_DIR: ${{ runner.temp }}/tradingview-profile
+          TV_SIGNAL_CHROME_PORT: '9224'
+          MODE: ${{ inputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TV_SIGNAL_CHROME_PATH="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium)"
+          export TV_SIGNAL_CHROME_PATH
+          if [ "$MODE" = test ]; then
+            node cloud/run.mjs --test
+          else
+            node cloud/run.mjs
+          fi
+      - name: Save scan diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scan-results-${{ github.run_id }}
+          path: cloud/runs/
+          if-no-files-found: ignore
+          retention-days: 3
