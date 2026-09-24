@@ -1,12 +1,12 @@
 # GitHub Actions 臨時雲端掃描包
 
-狀態：僅備妥程式，**尚未上傳、尚未登入、尚未掃描或寄信**。請只建立私人儲存庫；本資料夾以外的 SSH 私鑰、報告、設定檔不得上傳。
+狀態：程式已上傳至私人儲存庫，**尚未設定登入憑證、驗證掃描或寄信**。本資料夾以外的 SSH 私鑰、報告、設定檔不得上傳。
 
 ## 使用前驗證
 
 1. 本機掃描器的專用 Chrome 必須已登入 TradingView，而且圖表可看到私人 `tTMA ST 1.0.000` 指標。
-2. 在本機 `ttma-scanner` 資料夾執行 `node cloud/export-session.mjs`。它只在你的終端機顯示一長串登入憑證；**不要貼到聊天、郵件或程式碼中**，並當作密碼保管。此憑證可能過期或被 TradingView 要求重新登入。
-3. 建立 GitHub 私人儲存庫，**只上傳本 `github-deploy` 資料夾內容**。在儲存庫的 Actions secrets 設定 `TV_SESSION_COOKIES_B64`。不要放在 Variables。
+2. 在本機雙擊 `ttma-scanner/複製雲端登入憑證.cmd`。它先檢查私人指標，再把登入憑證複製到剪貼簿，**不顯示憑證內容**。若登入檢查失敗，先開啟掃描器專用 Chrome 登入 TradingView。憑證可能過期或被 TradingView 要求重新登入。
+3. 你本人在 GitHub 私人儲存庫的 Actions secrets 建立 `TV_SESSION_COOKIES_B64`，貼上剛複製的內容，存檔後清空剪貼簿。**不要貼到聊天、郵件、程式碼或 Variables**。
 4. Actions 手動執行 `TradingView L1 and S Alpha scan`，先選 `test`。它只掃前五檔，不寄信。核對執行紀錄及短期保存的報表中的代號、`DataDate` 與原始指標值。
 5. 測試成功後，若要寄信，再設定 `SMTP_HOST`、`SMTP_PORT`、`SMTP_USER`、`SMTP_PASS` 四個 Actions secrets。寄件服務的應用程式密碼同樣不得提供給聊天或放進程式碼。手動選 `full` 測完 997 檔及收信後，才能考慮新增每日排程。
 
