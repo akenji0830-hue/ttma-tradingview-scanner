@@ -46,7 +46,7 @@ try {
   }
   const args = [resolve(scanner, 'tradingview-signal-scanner.mjs'), 'scan',
     '--input', resolve(here, 'stocks.txt'), '--output-dir', runDir,
-    '--speed', 'safe', '--switch-mode', test ? 'url' : 'ui', '--passes', '2'];
+    '--speed', 'safe', '--switch-mode', 'url', '--passes', '2'];
   if (test) args.push('--max-symbols', '5', '--passes=1');
   const code = await new Promise((res, rej) => {
     const child = spawn(process.execPath, args, { stdio: 'inherit', env: process.env });
