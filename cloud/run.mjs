@@ -10,6 +10,9 @@ const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: '
 const test = process.argv.includes('--test');
 const runDir = resolve(here, 'runs', `${date}-${Date.now()}${test ? '-test' : ''}`);
 const lockPath = resolve(here, 'scan.lock');
+const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
+const smtpPort = Number(process.env.SMTP_PORT || 465);
+const smtpUser = process.env.SMTP_USER || 'akenji0830@gmail.com';
 // Explicit cloud configuration keeps the existing Windows launcher unchanged.
 for (const key of ['TV_SIGNAL_CHROME_PATH', 'TV_SIGNAL_PROFILE_DIR']) {
   if (!process.env[key]) throw new Error(`Missing ${key}`);
@@ -17,8 +20,8 @@ for (const key of ['TV_SIGNAL_CHROME_PATH', 'TV_SIGNAL_PROFILE_DIR']) {
 if (!process.env.TV_SESSION_COOKIES_B64) {
   throw new Error('Missing TV_SESSION_COOKIES_B64. The hosted runner cannot use your Windows Chrome login.');
 }
-if (!test && (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS)) {
-  throw new Error('Configure SMTP_HOST, SMTP_USER and SMTP_PASS before a full cloud run.');
+if (!test && !process.env.SMTP_PASS) {
+  throw new Error('Configure the Gmail app password as SMTP_PASS before a full cloud run.');
 }
 await mkdir(runDir, { recursive: true });
 const lock = await open(lockPath, 'wx').catch(() => { throw new Error('Another run is active, or a previous run left scan.lock. Check the process before removing the lock.'); });
@@ -35,11 +38,11 @@ try {
   if (!test) {
     const { default: nodemailer } = await import('nodemailer');
     transport = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 465),
-      secure: Number(process.env.SMTP_PORT || 465) === 465,
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpPort === 465,
       requireTLS: true,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+      auth: { user: smtpUser, pass: process.env.SMTP_PASS },
       connectionTimeout: 30000, socketTimeout: 60000,
     });
     await transport.verify();
@@ -68,7 +71,7 @@ try {
     console.log(`Cloud test finished: ${summary.ok}/${summary.stocks} checked, ${todaySignals.length} current-date signals. No email sent. Check DataDate in: ${runDir}`);
   } else {
     await transport.sendMail({
-      from: process.env.SMTP_USER,
+      from: smtpUser,
       to: 'akenji0830@gmail.com',
       subject: `[TradingView] ${date} L1 / S Alpha：今日 ${todaySignals.length} 檔，讀取失敗 ${summary.errors} 檔${summary.errors ? '（結果未齊）' : ''}`,
       text: `本次掃描：${summary.stocks} 檔；成功 ${summary.ok} 檔；失敗 ${summary.errors} 檔。\n今日訊號附件只保留 DataDate = ${date} 的股票；舊日期訊號不算今日訊號。完整稽核與失敗清單亦附上。${summary.errors ? '\n注意：結果未齊，不能將未讀取的股票視為沒有訊號。' : ''}`,
@@ -80,7 +83,7 @@ try {
   }
 } catch (error) {
   if (transport) {
-    await transport.sendMail({ from: process.env.SMTP_USER, to: 'akenji0830@gmail.com',
+    await transport.sendMail({ from: smtpUser, to: 'akenji0830@gmail.com',
       subject: `[TradingView] ${date} 掃描未完成`,
       text: '本次雲端掃描未完成，請查看主機執行紀錄。這不代表今日沒有訊號。',
     }).catch(() => console.error('Failure email also failed; inspect host logs.'));
