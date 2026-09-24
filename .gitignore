@@ -1,0 +1,16 @@
+*
+!/.gitignore
+!/README.md
+!/tradingview-signal-scanner.mjs
+!/tradingview-readiness.mjs
+!/cloud/
+/cloud/*
+!/cloud/run.mjs
+!/cloud/tradingview-session.mjs
+!/cloud/package.json
+!/cloud/stocks.txt
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/scan.yml
