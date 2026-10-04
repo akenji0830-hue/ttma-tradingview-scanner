@@ -3,10 +3,20 @@ import { readFile, writeFile, mkdir, open, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startBrowserWithSession } from './tradingview-session.mjs';
+import { marketDayStatus, taipeiDate } from './market-day.mjs';
+
+// This second gate also protects manual/API dispatches and old queued crons.
+// It runs before loading credentials, starting Chrome, or preparing any email.
+const marketDay = await marketDayStatus();
+console.log(`Market day ${marketDay.date}: ${marketDay.reason}`);
+if (!marketDay.allowed || process.argv.includes('--check-market-day')) {
+  console.log('No scan or email started.');
+  process.exit(0);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const scanner = resolve(here, '..');
-const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+const date = marketDay.date;
 const test = process.argv.includes('--test');
 const runDir = resolve(here, 'runs', `${date}-${Date.now()}${test ? '-test' : ''}`);
 const lockPath = resolve(here, 'scan.lock');
@@ -69,7 +79,7 @@ try {
   await writeFile(todayPath, toCsv([allSignals[0], ...todaySignals]), 'utf8');
   if (test) {
     console.log(`Cloud test finished: ${summary.ok}/${summary.stocks} checked, ${todaySignals.length} current-date signals. No email sent. Check DataDate in: ${runDir}`);
-  } else {
+  } else if (taipeiDate() === date) {
     await transport.sendMail({
       from: smtpUser,
       to: 'akenji0830@gmail.com',
@@ -82,7 +92,7 @@ try {
     });
   }
 } catch (error) {
-  if (transport) {
+  if (transport && taipeiDate() === date) {
     await transport.sendMail({ from: smtpUser, to: 'akenji0830@gmail.com',
       subject: `[TradingView] ${date} 掃描未完成`,
       text: '本次雲端掃描未完成，請查看主機執行紀錄。這不代表今日沒有訊號。',
