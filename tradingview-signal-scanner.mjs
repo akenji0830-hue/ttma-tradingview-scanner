@@ -5,6 +5,7 @@ import { createInterface } from "node:readline/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chooseDataWindowAction, createReadinessGate, isTriggered, parseReadinessSnapshot, runWithSafeFallback } from "./tradingview-readiness.mjs";
+import { evaluateReadOnlyWithRetry, waitForDocumentReady } from "./tradingview-browser-readiness.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -211,21 +212,24 @@ async function openSession(url, { reuseChart = true } = {}) {
     : null;
   const target = existing ?? await createTarget(url);
   const session = new CdpSession(target.webSocketDebuggerUrl);
-  await session.connect();
-  await session.send("Page.enable");
-  await session.send("Runtime.enable");
-  await session.send("DOM.enable");
-  await session.send("Page.bringToFront");
-  return session;
+  try {
+    await session.connect();
+    await session.send("Page.enable");
+    await session.send("Runtime.enable");
+    await session.send("DOM.enable");
+    await session.send("Page.bringToFront");
+    // A newly created page may not have its default JS context yet, or the
+    // first redirect may destroy it. Wait before making any chart/UI reads.
+    await waitForPage(session);
+    return session;
+  } catch (error) {
+    session.close();
+    throw error;
+  }
 }
 
 async function waitForPage(session, timeoutMs = 30_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await session.evaluate("document.readyState === 'complete'")) return;
-    await sleep(250);
-  }
-  throw new ScannerError("TradingView 頁面載入逾時");
+  await waitForDocumentReady(session, { timeoutMs });
 }
 
 async function navigate(session, url) {
@@ -235,7 +239,7 @@ async function navigate(session, url) {
 }
 
 async function ensureChartPage(session) {
-  const currentUrl = await session.evaluate("location.href");
+  const currentUrl = await evaluateReadOnlyWithRetry(session, "location.href");
   let current;
   let expected;
   try {
@@ -1184,6 +1188,15 @@ async function scan() {
 }
 
 async function selfTest() {
+  // This existing Actions preflight now covers the startup race regression.
+  const browserTestsExit = await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(process.execPath, ["--test", resolve(here, "tradingview-browser-readiness.test.mjs")], {
+      stdio: "inherit", windowsHide: true,
+    });
+    child.once("error", rejectPromise);
+    child.once("exit", (code) => resolvePromise(code ?? 1));
+  });
+  if (browserTestsExit !== 0) throw new ScannerError("瀏覽器載入等待測試失敗");
   const stocks = await loadStocksFromFile(inputPath);
   console.log(`排除後待掃描 ${eligibleStocks(stocks).length} 檔；固定排除：${[...excludedSymbols].join("、")}`);
   const double = stocks.find((stock) => stock.code === "3324");
