@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { withRecovery, stopChild, sleep } from './reliability.mjs';
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const allowedDomain = (domain) => /(^|\.)tradingview\.com$/i.test(String(domain).replace(/^\./, ''));
 
 export function decodeSession(value) {
@@ -43,39 +44,59 @@ export async function requestCdp(webSocketUrl, method, params = {}) {
   }
 }
 
-async function waitForChrome(port) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+export async function waitForChrome(port, { child, timeoutMs = 60000, fetcher = fetch, pause = sleep, clock = Date.now } = {}) {
+  const deadline = clock() + timeoutMs;
+  while (clock() < deadline) {
+    if (child?.startupError) throw child.startupError;
+    if (child && (child.exitCode != null || child.signalCode != null)) {
+      throw new Error(`Chrome exited before becoming ready (code ${child.exitCode}, signal ${child.signalCode}).`);
+    }
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1000) });
+      const response = await fetcher(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1000) });
       if (response.ok) return;
     } catch { /* Chrome is starting. */ }
-    await sleep(250);
+    await pause(250);
   }
   throw new Error('Headless Chrome did not start.');
 }
 
-export async function startBrowserWithSession({ chromePath, profileDirectory, port, encodedCookies }) {
+export async function startBrowserWithSession({ chromePath, profileDirectory, port, encodedCookies }, {
+  spawnProcess = spawn, createProfile = async () => {
+    await mkdir(dirname(profileDirectory), { recursive: true });
+    return mkdtemp(`${profileDirectory}-`);
+  }, waitForStartup = waitForChrome, fetcher = fetch, cdp = requestCdp,
+  stop = stopChild, pause = sleep,
+} = {}) {
   const cookies = decodeSession(encodedCookies);
-  await mkdir(profileDirectory, { recursive: true });
-  const child = spawn(chromePath, [
+  const nowSeconds = Date.now() / 1000;
+  const validCookies = cookies.filter((cookie) => !cookie.expires || cookie.expires < 0 || cookie.expires > nowSeconds);
+  if (!validCookies.length || cookies.some((cookie) => cookie.name === 'sessionid' && cookie.expires > 0 && cookie.expires <= nowSeconds)) {
+    const error = new Error('TradingView login cookies have expired. Export a fresh session.');
+    error.code = 'AUTH_REQUIRED';
+    throw error;
+  }
+  return withRecovery(async (attempt) => {
+  const freshProfile = await createProfile();
+  const child = spawnProcess(chromePath, [
     `--remote-debugging-port=${port}`,
-    `--user-data-dir=${profileDirectory}`,
+    `--user-data-dir=${freshProfile}`,
     '--headless=new',
     '--disable-dev-shm-usage',
     '--no-first-run',
     '--no-default-browser-check',
     'about:blank',
-  ], { stdio: 'ignore' });
+  ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+  let startupLog = '';
+  child.once('error', (error) => { child.startupError = error; });
+  child.stderr?.on('data', (chunk) => { startupLog = `${startupLog}${chunk}`.slice(-4000); });
   try {
-    await waitForChrome(port);
-    const response = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, {
+    console.log(`Starting Chrome (attempt ${attempt}/3, up to 60s).`);
+    await waitForStartup(port, { child });
+    const response = await fetcher(`http://127.0.0.1:${port}/json/new?about:blank`, {
       method: 'PUT', signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) throw new Error('Cannot create Chrome page for session restore.');
     const target = await response.json();
-    const nowSeconds = Date.now() / 1000;
-    const validCookies = cookies.filter((cookie) => !cookie.expires || cookie.expires < 0 || cookie.expires > nowSeconds);
-    if (!validCookies.length) throw new Error('All TradingView login cookies have expired. Export a fresh session.');
     const params = validCookies.map((cookie) => {
       const output = {
         name: cookie.name, value: cookie.value, path: cookie.path || '/',
@@ -87,11 +108,14 @@ export async function startBrowserWithSession({ chromePath, profileDirectory, po
       if (cookie.expires > 0) output.expires = cookie.expires;
       return output;
     });
-    await requestCdp(target.webSocketDebuggerUrl, 'Network.setCookies', { cookies: params });
+    await cdp(target.webSocketDebuggerUrl, 'Network.setCookies', { cookies: params });
     console.log(`Restored ${params.length} TradingView cookies into a temporary browser profile.`);
-    return () => child.kill('SIGTERM');
+    return () => stop(child);
   } catch (error) {
-    child.kill('SIGTERM');
+    await stop(child);
+    const safeLog = startupLog.replace(/(?:https?|wss?):\/\/\S+/g, '[URL]').slice(-2000);
+    if (safeLog) console.warn(`Chrome startup diagnostic: ${safeLog}`);
     throw error;
   }
+  }, { attempts: 3, pause, onRetry: (error) => console.warn(`Chrome startup failed; retrying with a fresh temporary profile: ${error.message}`) });
 }

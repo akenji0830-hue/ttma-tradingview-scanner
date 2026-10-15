@@ -1,13 +1,13 @@
-import { spawn } from 'node:child_process';
 import { readFile, writeFile, mkdir, open, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startBrowserWithSession } from './tradingview-session.mjs';
 import { marketDayStatus, taipeiDate } from './market-day.mjs';
+import { withRecovery, runScanner, createMailer, saveDelivery, recipient } from './reliability.mjs';
 
 // This second gate also protects manual/API dispatches and old queued crons.
 // It runs before loading credentials, starting Chrome, or preparing any email.
-const marketDay = await marketDayStatus();
+const marketDay = await withRecovery(() => marketDayStatus());
 console.log(`Market day ${marketDay.date}: ${marketDay.reason}`);
 if (!marketDay.allowed || process.argv.includes('--check-market-day')) {
   console.log('No scan or email started.');
@@ -20,8 +20,6 @@ const date = marketDay.date;
 const test = process.argv.includes('--test');
 const runDir = resolve(here, 'runs', `${date}-${Date.now()}${test ? '-test' : ''}`);
 const lockPath = resolve(here, 'scan.lock');
-const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com';
-const smtpPort = Number(process.env.SMTP_PORT || 465);
 const smtpUser = process.env.SMTP_USER || 'akenji0830@gmail.com';
 // Explicit cloud configuration keeps the existing Windows launcher unchanged.
 for (const key of ['TV_SIGNAL_CHROME_PATH', 'TV_SIGNAL_PROFILE_DIR']) {
@@ -39,40 +37,43 @@ let transport;
 let stopBrowser;
 try {
   await lock.writeFile(String(process.pid));
-  stopBrowser = await startBrowserWithSession({
-    chromePath: process.env.TV_SIGNAL_CHROME_PATH,
-    profileDirectory: process.env.TV_SIGNAL_PROFILE_DIR,
-    port: Number(process.env.TV_SIGNAL_CHROME_PORT || 9224),
-    encodedCookies: process.env.TV_SESSION_COOKIES_B64,
-  });
   if (!test) {
-    const { default: nodemailer } = await import('nodemailer');
-    transport = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpPort === 465,
-      requireTLS: true,
-      auth: { user: smtpUser, pass: process.env.SMTP_PASS },
-      connectionTimeout: 30000, socketTimeout: 60000,
-    });
-    await transport.verify();
+    transport = await createMailer();
+    await withRecovery(() => transport.verify(), { attempts: 2 });
   }
+  const deadline = Date.now() + 210 * 60 * 1000;
+  let summary;
+  await withRecovery(async (attempt) => {
+    const remaining = deadline - Date.now();
+    if (remaining < 30000 || taipeiDate() !== date) {
+      const error = new Error('Recovery time/date budget exhausted'); error.code = 'BUDGET'; throw error;
+    }
+    console.log(`Scan recovery attempt ${attempt}/3 (successful checkpoint rows will be retained).`);
+    try {
+      stopBrowser = await startBrowserWithSession({
+        chromePath: process.env.TV_SIGNAL_CHROME_PATH,
+        profileDirectory: process.env.TV_SIGNAL_PROFILE_DIR,
+        port: Number(process.env.TV_SIGNAL_CHROME_PORT || 9224),
+        encodedCookies: process.env.TV_SESSION_COOKIES_B64,
+      });
   const args = [resolve(scanner, 'tradingview-signal-scanner.mjs'), 'scan',
     '--input', resolve(here, 'stocks.txt'), '--output-dir', runDir,
-    '--speed', 'safe', '--switch-mode', 'url', '--passes', '2'];
+    '--speed', 'safe', '--switch-mode', 'url', '--passes', '2', '--resume'];
   if (test) args.push('--max-symbols', '5', '--passes=1');
-  const code = await new Promise((res, rej) => {
-    const child = spawn(process.execPath, args, { stdio: 'inherit', env: process.env });
-    const timeout = setTimeout(() => child.kill('SIGTERM'), 4 * 60 * 60 * 1000);
-    child.on('error', e => { clearTimeout(timeout); rej(e); });
-    child.on('exit', c => { clearTimeout(timeout); res(c ?? 1); });
-  });
-  if (code !== 0) throw new Error(`Scanner exited with code ${code}; inspect ${runDir}`);
-  const summary = JSON.parse(await readFile(resolve(runDir, 'TradingView-scan-summary-latest.json'), 'utf8'));
+  await runScanner(args, { timeoutMs: Math.min(125 * 60 * 1000, remaining) });
+  summary = JSON.parse(await readFile(resolve(runDir, 'TradingView-scan-summary-latest.json'), 'utf8'));
   if (!test && summary.stocks !== 997) throw new Error(`Expected 997 eligible stocks, received ${summary.stocks}. No result email sent.`);
   if (summary.ok === 0 || summary.ok + summary.errors !== summary.stocks) {
     throw new Error('Scan output is incomplete or contains no successfully checked stocks.');
   }
+  if (summary.errors > 0 && attempt < 3) throw new Error(`${summary.errors} stocks need a checkpoint recovery pass`);
+    } finally {
+      await stopBrowser?.();
+      stopBrowser = null;
+    }
+  }, { attempts: 3, delayMs: 10000, onRetry: async (error, attempt) => {
+    console.warn(`Attempt ${attempt} interrupted; restarting from checkpoint: ${error.message}`);
+  } });
   const allSignals = parseCsv(await readFile(resolve(runDir, 'TradingView-signals-latest.csv'), 'utf8'));
   const todaySignals = allSignals.slice(1).filter((row) => row[6] === date);
   const todayPath = resolve(runDir, 'TradingView-signals-today.csv');
@@ -80,28 +81,26 @@ try {
   if (test) {
     console.log(`Cloud test finished: ${summary.ok}/${summary.stocks} checked, ${todaySignals.length} current-date signals. No email sent. Check DataDate in: ${runDir}`);
   } else if (taipeiDate() === date) {
-    await transport.sendMail({
+    const message = {
       from: smtpUser,
-      to: 'akenji0830@gmail.com',
+      to: recipient,
+      messageId: `<ttma-signals-${date}-${process.env.GITHUB_RUN_ID || Date.now()}@ttma-scanner.invalid>`,
       subject: `[TradingView] ${date} L1 / S Alpha：今日 ${todaySignals.length} 檔，讀取失敗 ${summary.errors} 檔${summary.errors ? '（結果未齊）' : ''}`,
       text: `本次掃描：${summary.stocks} 檔；成功 ${summary.ok} 檔；失敗 ${summary.errors} 檔。\n今日訊號附件只保留 DataDate = ${date} 的股票；舊日期訊號不算今日訊號。完整稽核與失敗清單亦附上。${summary.errors ? '\n注意：結果未齊，不能將未讀取的股票視為沒有訊號。' : ''}`,
       attachments: [
         { filename: 'TradingView-signals-today.csv', path: todayPath },
         ...['TradingView-scan-latest.csv', 'TradingView-errors-latest.csv'].map((filename) => ({ filename, path: resolve(runDir, filename) })),
       ],
-    });
+    };
+    const info = await withRecovery(() => transport.sendMail(message), { attempts: 2 });
+    await saveDelivery(date, summary, info);
   }
 } catch (error) {
-  if (transport && taipeiDate() === date) {
-    await transport.sendMail({ from: smtpUser, to: 'akenji0830@gmail.com',
-      subject: `[TradingView] ${date} 掃描未完成`,
-      text: '本次雲端掃描未完成，請查看主機執行紀錄。這不代表今日沒有訊號。',
-    }).catch(() => console.error('Failure email also failed; inspect host logs.'));
-  }
+  await writeFile(resolve(runDir, 'failure.json'), JSON.stringify({ date, error: error.message, at: new Date().toISOString() }), 'utf8');
   throw error;
 } finally {
   transport?.close();
-  stopBrowser?.();
+  await stopBrowser?.();
   await lock.close();
   await unlink(lockPath);
 }

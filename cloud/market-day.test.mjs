@@ -102,7 +102,7 @@ test('invalid quote response fails closed', async () => {
 
 test('runner checks market day before credentials/browser/mail initialization', async () => {
   const source = await readFile(new URL('./run.mjs', import.meta.url), 'utf8');
-  assert.ok(source.indexOf('const marketDay = await marketDayStatus()') < source.indexOf('const smtpHost'));
+  assert.ok(source.indexOf('const marketDay = await withRecovery(() => marketDayStatus())') < source.indexOf('const smtpUser'));
   assert.ok(source.indexOf('process.exit(0)') < source.indexOf('await startBrowserWithSession('));
-  assert.match(source, /transport && taipeiDate\(\) === date/);
+  assert.match(source, /else if \(taipeiDate\(\) === date\)/);
 });
