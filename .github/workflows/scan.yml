@@ -1,41 +1,82 @@
 name: TradingView L1 and S Alpha scan
+run-name: TTMA ${{ inputs.mode || 'full' }} ${{ inputs.scan_date || github.event_name }}
 
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'test scans 5 symbols and sends no email; full scans 997 symbols'
+        description: 'test scans 5 without email; full scans 997; verify runs safety tests only'
         required: true
         type: choice
         default: test
-        options:
-          - test
-          - full
+        options: [test, full, verify]
+      scan_date:
+        description: 'Optional Taipei YYYY-MM-DD; an old date never scans a different day'
+        required: false
+        type: string
+        default: ''
+  # Independent fallback. Cloudflare remains the primary 13:32 trigger.
+  schedule:
+    - cron: '20 6 * * 1-5'
 
 permissions:
   contents: read
 
 concurrency:
-  group: tradingview-scan
+  group: tradingview-${{ inputs.mode == 'verify' && 'verify' || 'scan' }}
   cancel-in-progress: false
 
 jobs:
   scan:
-    # Scheduled runs remain disabled until the five-stock and full-scan tests
-    # pass and GitHub Actions billing is configured to stop at the free limit.
-    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_WEEKDAY_SCAN == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 270
+    timeout-minutes: 240
+    env:
+      MODE: ${{ inputs.mode || 'full' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Check stock list and indicator parser
-        run: node tradingview-signal-scanner.mjs self-test --input cloud/stocks.txt
+      - name: Check stock list and recovery safety tests
+        run: |
+          node tradingview-signal-scanner.mjs self-test --input cloud/stocks.txt
+          node --test cloud/reliability.test.mjs cloud/market-day.test.mjs
+      - name: Verify hosted Chrome startup without account data
+        if: env.MODE == 'verify'
+        run: |
+          TV_SIGNAL_CHROME_PATH="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium)"
+          export TV_SIGNAL_CHROME_PATH
+          node cloud/browser-smoke.mjs
+      - name: Confirm Taiwan trading day
+        id: day
+        if: env.MODE != 'verify'
+        env:
+          REQUESTED_SCAN_DATE: ${{ inputs.scan_date }}
+        run: node cloud/reliability.mjs day
+      - name: Restore accepted delivery marker
+        id: cache
+        if: env.MODE == 'full' && steps.day.outputs.allowed == 'true'
+        uses: actions/cache/restore@v5
+        continue-on-error: true
+        timeout-minutes: 2
+        with:
+          path: cloud/delivery/${{ steps.day.outputs.date }}.json
+          key: ttma-delivered-v1-${{ steps.day.outputs.date }}
+      - name: Check whether today was already delivered
+        id: marker
+        if: env.MODE == 'full' && steps.day.outputs.allowed == 'true'
+        run: node cloud/reliability.mjs check-marker
       - name: Install mail dependency
-        run: npm install --prefix cloud --omit=dev --no-audit --no-fund
+        if: env.MODE != 'verify' && steps.day.outputs.allowed == 'true' && steps.marker.outputs.delivered != 'true'
+        run: |
+          for attempt in 1 2 3; do
+            npm install --prefix cloud --omit=dev --no-audit --no-fund && exit 0
+            sleep 5
+          done
+          exit 1
       - name: Scan TradingView
+        id: scanner
+        if: env.MODE != 'verify' && steps.day.outputs.allowed == 'true' && steps.marker.outputs.delivered != 'true'
         env:
           TV_SESSION_COOKIES_B64: ${{ secrets.TV_SESSION_COOKIES_B64 }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
@@ -44,7 +85,6 @@ jobs:
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           TV_SIGNAL_PROFILE_DIR: ${{ runner.temp }}/tradingview-profile
           TV_SIGNAL_CHROME_PORT: '9224'
-          MODE: ${{ inputs.mode }}
         shell: bash
         run: |
           set -euo pipefail
@@ -55,11 +95,34 @@ jobs:
           else
             node cloud/run.mjs
           fi
+      - name: Report delivery confirmed
+        if: env.MODE == 'full' && steps.day.outputs.allowed == 'true'
+        run: node cloud/reliability.mjs require-marker
+      - name: Save accepted delivery marker for the fallback
+        if: env.MODE == 'full' && steps.day.outputs.allowed == 'true' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        continue-on-error: true
+        timeout-minutes: 2
+        with:
+          path: cloud/delivery/${{ steps.day.outputs.date }}.json
+          key: ttma-delivered-v1-${{ steps.day.outputs.date }}
+      - name: Notify incomplete scan
+        if: failure() && env.MODE == 'full'
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MARKET_CONFIRMED: ${{ steps.day.outputs.allowed }}
+          REPORT_DATE: ${{ steps.day.outputs.date }}
+        run: |
+          npm install --prefix cloud --omit=dev --no-audit --no-fund
+          node cloud/reliability.mjs notify
       - name: Save scan diagnostics
-        if: always()
+        if: always() && env.MODE != 'verify'
         uses: actions/upload-artifact@v4
         with:
-          name: scan-results-${{ github.run_id }}
+          name: scan-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: cloud/runs/
           if-no-files-found: ignore
           retention-days: 3
