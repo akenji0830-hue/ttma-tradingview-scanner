@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { createInterface } from "node:readline/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1050,7 +1050,9 @@ async function loadCheckpoint(path, fingerprint) {
 }
 
 async function saveCheckpoint(path, fingerprint, rows) {
-  await writeFile(path, JSON.stringify({ fingerprint, rows }, null, 2), "utf8");
+  const temporary = `${path}.tmp`;
+  await writeFile(temporary, JSON.stringify({ fingerprint, rows }, null, 2), "utf8");
+  await rename(temporary, path);
 }
 
 async function login() {
