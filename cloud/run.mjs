@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, open, unlink } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startBrowserWithSession } from './tradingview-session.mjs';
-import { marketDayStatus } from './market-day.mjs';
+import { marketDayStatus, taipeiDate } from './market-day.mjs';
 import { withRecovery, runScanner, createMailer, saveDelivery, recipient } from './reliability.mjs';
 
 // This second gate also protects manual/API dispatches and old queued crons.
