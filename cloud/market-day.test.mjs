@@ -104,5 +104,5 @@ test('runner checks market day before credentials/browser/mail initialization', 
   const source = await readFile(new URL('./run.mjs', import.meta.url), 'utf8');
   assert.ok(source.indexOf('const marketDay = await withRecovery(() => marketDayStatus())') < source.indexOf('const smtpUser'));
   assert.ok(source.indexOf('process.exit(0)') < source.indexOf('await startBrowserWithSession('));
-  assert.match(source, /else if \(taipeiDate\(\) === date\)/);
+  assert.match(source, /if \(remaining < 30000 \|\| taipeiDate\(\) !== date\)/);
 });
