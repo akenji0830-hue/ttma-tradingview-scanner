@@ -82,11 +82,32 @@ try {
   const statusColumn = auditHeader.indexOf('Status');
   const dateColumn = auditHeader.indexOf('DataDate');
   const auditedRows = audit.slice(1);
-  const freshRows = auditedRows.filter((row) => row[statusColumn] === 'OK' && row[dateColumn] === date);
-  if (freshRows.length !== summary.ok) {
-    throw new Error(`Fresh-data check failed: ${freshRows.length}/${summary.ok} successful rows match scan date ${date}. No result email sent.`);
+  const staleRows = auditedRows.filter((row) => row[statusColumn] === 'OK' && row[dateColumn] !== date);
+  for (const row of staleRows) {
+    row[statusColumn] = 'ERROR';
+    row[errorColumn] = `資料日期 ${row[dateColumn] || '空白'} 與本次掃描日期 ${date} 不符；已排除，不視為無訊號`;
   }
-  const todaySignals = allSignals.slice(1).filter((row) => row[6] === date);
+  const freshRows = auditedRows.filter((row) => row[statusColumn] === 'OK' && row[dateColumn] === date);
+  if (freshRows.length + summary.errors + staleRows.length !== summary.stocks) {
+    throw new Error(`Scan rows do not reconcile: fresh ${freshRows.length}, scanner errors ${summary.errors}, stale ${staleRows.length}, total ${summary.stocks}. No result email sent.`);
+  }
+  if (staleRows.length) {
+    summary.ok = freshRows.length;
+    summary.errors += staleRows.length;
+    console.warn(`Excluded ${staleRows.length} successful-looking row(s) with stale/missing dates; they are listed as errors, never as no-signal.`);
+    const signalColumn = auditHeader.indexOf('Signal');
+    const validSignalRows = auditedRows.filter((row) => row[statusColumn] === 'OK' && row[dateColumn] === date && signalColumn >= 0 && row[signalColumn]);
+    const errors = auditedRows.filter((row) => row[statusColumn] !== 'OK');
+    summary.signals = validSignalRows.length;
+    await Promise.all([
+      writeFile(resolve(runDir, 'TradingView-scan-latest.csv'), toCsv([auditHeader, ...auditedRows]), 'utf8'),
+      writeFile(resolve(runDir, 'TradingView-signals-latest.csv'), toCsv([auditHeader, ...validSignalRows]), 'utf8'),
+      writeFile(resolve(runDir, 'TradingView-errors-latest.csv'), toCsv([auditHeader, ...errors]), 'utf8'),
+      writeFile(resolve(runDir, 'TradingView-scan-summary-latest.json'), JSON.stringify(summary, null, 2), 'utf8'),
+    ]);
+  }
+  const signalDateColumn = (allSignals[0] ?? []).indexOf('DataDate');
+  const todaySignals = allSignals.slice(1).filter((row) => signalDateColumn >= 0 && row[signalDateColumn] === date);
   const todayPath = resolve(runDir, 'TradingView-signals-today.csv');
   await writeFile(todayPath, toCsv([allSignals[0], ...todaySignals]), 'utf8');
   if (test) {
@@ -96,8 +117,8 @@ try {
       from: smtpUser,
       to: recipient,
       messageId: `<ttma-signals-${date}-${process.env.GITHUB_RUN_ID || Date.now()}@ttma-scanner.invalid>`,
-      subject: `[TradingView] ${date} L1 / S Alpha：今日 ${todaySignals.length} 檔，${summary.errors} 檔讀取失敗已跳過${summary.errors ? '（結果未齊）' : ''}`,
-      text: `本次掃描：${summary.stocks} 檔；成功 ${summary.ok} 檔；讀取失敗並跳過 ${summary.errors} 檔。每檔讀取失敗的股票已在兩輪中各嘗試一次，仍無法讀取者保留為錯誤並列入失敗清單，不會當成無訊號。\n訊號附件只保留 DataDate = ${date} 的股票；完整稽核與失敗清單亦附上。${summary.errors ? '\n注意：結果未齊，未讀取的股票不能視為沒有訊號。' : ''}`,
+      subject: `[TradingView] ${date} L1 / S Alpha：今日 ${todaySignals.length} 檔，${summary.errors} 檔資料無法確認已跳過${summary.errors ? '（結果未齊）' : ''}`,
+      text: `本次掃描：${summary.stocks} 檔；成功 ${summary.ok} 檔；讀取失敗或日期過期並跳過 ${summary.errors} 檔。每檔讀取失敗的股票已在兩輪中各嘗試一次，仍無法讀取者保留為錯誤並列入失敗清單，不會當成無訊號。\n訊號附件只保留 DataDate = ${date} 的股票；完整稽核與失敗清單亦附上。${summary.errors ? '\n注意：結果未齊，未讀取的股票不能視為沒有訊號。' : ''}`,
       attachments: [
         { filename: 'TradingView-signals-today.csv', path: todayPath },
         ...['TradingView-scan-latest.csv', 'TradingView-errors-latest.csv'].map((filename) => ({ filename, path: resolve(runDir, filename) })),
