@@ -12,7 +12,7 @@ const argv = process.argv.slice(2);
 const command = argv[0] ?? "help";
 
 // User-requested exclusions apply to every source and every retry pass.
-const excludedSymbols = new Set(["TPEX:5371", "TWSE:2867", "TPEX:5236, "TPEX:8183", "TPEX:2640""]);
+const excludedSymbols = new Set(["TPEX:5371", "TWSE:2867", "TPEX:5236", "TPEX:8183", "TPEX:2640"]);
 function eligibleStocks(stocks) {
   return stocks.filter((stock) => !excludedSymbols.has(stock.tradingViewSymbol));
 }
