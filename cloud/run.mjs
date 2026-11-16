@@ -81,6 +81,7 @@ try {
   const auditHeader = audit[0] ?? [];
   const statusColumn = auditHeader.indexOf('Status');
   const dateColumn = auditHeader.indexOf('DataDate');
+  const errorColumn = auditHeader.indexOf('Error');
   const auditedRows = audit.slice(1);
   const staleRows = auditedRows.filter((row) => row[statusColumn] === 'OK' && row[dateColumn] !== date);
   for (const row of staleRows) {
