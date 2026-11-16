@@ -57,8 +57,12 @@ export async function marketDayStatus({ now = new Date(), fetcher = fetch } = {}
   const date = taipeiDate(now);
   const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
   if (weekday === 0 || weekday === 6) return { date, allowed: false, reason: 'Weekend' };
+  try {
   const calendar = calendarStatus(date, await fetchJson(CALENDAR_URL, fetcher));
   if (!calendar.allowed) return { date, ...calendar };
+  } catch (error) {
+    if (!String(error?.message || '').includes('TWSE calendar does not cover')) throw error;
+  }
   const quote = await fetchJson(`${QUOTE_URL}&_=${now.getTime()}`, fetcher);
   if (quote?.rtcode !== '0000' || !Array.isArray(quote.msgArray) ||
       !/^\d{8}$/.test(quote.queryTime?.sysDate ?? '')) {
