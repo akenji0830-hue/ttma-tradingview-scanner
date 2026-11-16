@@ -62,7 +62,7 @@ try {
   if (test) args.push('--max-symbols', '5', '--passes=1');
   await runScanner(args, { timeoutMs: Math.min(125 * 60 * 1000, remaining) });
   summary = JSON.parse(await readFile(resolve(runDir, 'TradingView-scan-summary-latest.json'), 'utf8'));
-  if (!test && summary.stocks !== 997) throw new Error(`Expected 997 eligible stocks, received ${summary.stocks}. No result email sent.`);
+  if (!test && summary.stocks !== 995) throw new Error(`Expected 995 eligible stocks, received ${summary.stocks}. No result email sent.`);
   if (summary.ok === 0 || summary.ok + summary.errors !== summary.stocks) {
     throw new Error('Scan output is incomplete or contains no successfully checked stocks.');
   }
