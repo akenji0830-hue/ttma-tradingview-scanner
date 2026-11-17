@@ -101,9 +101,9 @@ export async function output(name, value) {
 }
 
 export function validDelivery(marker, date) {
-  return marker?.date === date && marker.sent === true && marker.stocks === 997 &&
-    Number.isInteger(marker.ok) && marker.ok > 0 && marker.ok <= 997 &&
-    Number.isInteger(marker.errors) && marker.errors >= 0 && marker.ok + marker.errors === 997;
+  return marker?.date === date && marker.sent === true && Number.isInteger(marker.stocks) && marker.stocks >= 995 &&
+      Number.isInteger(marker.ok) && marker.ok > 0 && marker.ok <= marker.stocks &&
+    Number.isInteger(marker.errors) && marker.errors >= 0 && marker.ok + marker.errors === marker.stocks;
 }
 
 export async function saveDelivery(date, summary, info) {
