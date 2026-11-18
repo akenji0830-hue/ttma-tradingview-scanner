@@ -17,9 +17,12 @@ on:
         default: ''
   # Independent fallback. Cloudflare remains the primary 13:32 trigger.
   schedule:
-    - cron: '20 6 * * 1-5'
-    - cron: '32 5 * * 1-5'
-    
+    - cron: '33 5 * * 1-5'
+    - cron: '48 5 * * 1-5'
+    - cron: '17 6 * * 1-5'
+    - cron: '47 6 * * 1-5'
+    - cron: '23 7 * * 1-5'
+    - cron: '53 7 * * 1-5'
 permissions:
   contents: read
 
