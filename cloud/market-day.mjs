@@ -3,6 +3,10 @@ export const CALENDAR_URL = 'https://openapi.twse.com.tw/v1/holidaySchedule/holi
 export const QUOTE_URL = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=tse_2330.tw&json=1&delay=0';
 
 export function taipeiDate(now = new Date()) {
+  if (arguments.length === 0) {
+    const hour = Number(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', hour: '2-digit', hour12: false }).format(now));
+    if (hour === 24 || hour < 9) now = new Date(now.getTime() - 12 * 3600 * 1000);
+  }
   const parts = new Intl.DateTimeFormat('en', {
     timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(now);
