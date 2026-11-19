@@ -107,7 +107,7 @@ test('run supervisor uses a persistent checkpoint and atomic scanner checkpoints
 });
 test('fallback and watchdog never require paid billing or expanded token permissions', async () => {
   const workflow = await readFile(new URL('../.github/workflows/scan.yml', import.meta.url), 'utf8');
-  assert.match(workflow, /20 6 \* \* 1-5/);
+  assert.match(workflow, /17 6 \* \* 1-5/);
   assert.match(workflow, /Report delivery confirmed/);
   assert.match(workflow, /contents: read/); assert.doesNotMatch(workflow, /actions: write|contents: write/);
   assert.match(workflow, /failure\(\) && env.MODE == 'full'/);
